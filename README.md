@@ -42,19 +42,30 @@ sudo -u mikrotik-monitor ssh-keygen -q -t ed25519 -N '' -f /var/lib/mikrotik-cli
 sudo cat /var/lib/mikrotik-client-monitor/.ssh/id_ed25519.pub
 ```
 
-Copy the **public** key printed by the last command. The private key stays on this host; never upload it to the router or commit it. A key without a passphrase is used so systemd can run unattended, so keep the service account and key file permissions restricted.
+Copy the **public** key printed by the last command, or transfer only the file ending in `.pub` to an administrator workstation. The private key is the file without `.pub`; it stays on this host and must never be uploaded to the router or committed. A key without a passphrase is used so systemd can run unattended, so keep the service account and key file permissions restricted.
 
 ### 3. Create a least-privilege RouterOS user
 
-In an administrative RouterOS terminal, create a custom group with only `ssh,read` policies, then add the public key from step 2:
+In an administrative RouterOS terminal, create a custom group with only `ssh,read` policies and a collector user:
 
 ```routeros
 /user group add name=metrics-read policy=ssh,read
 /user add name=metrics-reader group=metrics-read password="<unique-strong-password>"
+```
+
+**The public key must then be installed on the MikroTik.** You can paste the complete `ssh-ed25519 ...` line from step 2 into the `key` value:
+
+```routeros
 /user ssh-keys add user=metrics-reader key="<paste-the-public-ssh-key>"
 ```
 
-The built-in `read` group grants more permissions than this collector needs. RouterOS versions without `ssh-keys add` can upload the **public** key and use `/user ssh-keys import public-key-file=<filename> user=metrics-reader`. Restrict router SSH access to the collector host in your router firewall or `/ip service` rules. Use a key type supported by your RouterOS version. The collector uses SSH keys only, not password login.
+Alternatively, save the public key as `mikrotik-monitor.pub` on your administrator workstation, upload that `.pub` file to the router's **Files** window in WinBox, then run:
+
+```routeros
+/user ssh-keys import public-key-file=mikrotik-monitor.pub user=metrics-reader
+```
+
+Both methods install the same public key; the private `id_ed25519` file never goes to the router. The built-in `read` group grants more permissions than this collector needs. Restrict router SSH access to the collector host in your router firewall or `/ip service` rules. Use a key type supported by your RouterOS version. The collector uses SSH keys only, not password login. See MikroTik's [SSH key instructions](https://manual.mikrotik.com/docs/authentication-authorization-accounting/user/) and [WinBox file transfer instructions](https://manual.mikrotik.com/docs/management-tools/winbox-legacy/).
 
 ### 4. Pin the router's SSH host key and test both reads
 
