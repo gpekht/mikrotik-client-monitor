@@ -1,22 +1,11 @@
 [Unit]
-Description=MikroTik client location monitor
-After=network-online.target
-Wants=network-online.target
+Description=MikroTik client location collector
 
 [Service]
-Type=simple
-User=mikrotik-monitor
-Group=mikrotik-monitor
-WorkingDirectory=/opt/mikrotik-client-monitor
-EnvironmentFile=/etc/mikrotik-client-monitor.env
-ExecStart=/opt/mikrotik-client-monitor/.venv/bin/mikrotik-client-monitor run
-Restart=on-failure
-RestartSec=15
+Type=oneshot
+WorkingDirectory=%h/mikrotik-client-monitor
+EnvironmentFile=%h/mikrotik-client-monitor/.env
+ExecStart=%h/mikrotik-client-monitor/venv/bin/mikrotik-client-monitor once
+TimeoutStartSec=10min
 UMask=0077
 NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=read-only
-
-[Install]
-WantedBy=multi-user.target

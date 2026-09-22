@@ -1,11 +1,11 @@
 [Unit]
-Description=Poll MikroTik client locations on a schedule
+Description=Poll MikroTik client locations every two minutes
 
 [Timer]
 OnBootSec=1min
-OnUnitActiveSec=2min
-Unit=mikrotik-client-monitor-once.service
-Persistent=true
+OnUnitInactiveSec=2min
+AccuracySec=1s
+Unit=mikrotik-client-monitor.service
 
 [Install]
 WantedBy=timers.target
