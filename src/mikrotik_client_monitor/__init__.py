@@ -1,0 +1,1 @@
+"""MikroTik client location collector."""
