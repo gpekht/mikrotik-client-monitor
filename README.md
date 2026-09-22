@@ -19,55 +19,107 @@ The bridge FDB shows the router-facing interface through which a MAC was learned
 
 Client MAC, IP, and hostname are metric labels. They leave your network for the configured remote write service and can create many time series on busy networks. Configure retention/access accordingly. Rename devices with `DEVICE_NAMES_JSON` if their DHCP hostname is missing or unhelpful. Private/randomized MACs appear as different devices when they change.
 
-## Router setup
+## Complete setup on Raspberry Pi OS or Debian Linux
 
-Use a custom RouterOS user group with only SSH login and read rights; the built-in `read` group grants additional permissions. From an administrative router session:
+These commands use a dedicated `mikrotik-monitor` Linux account, install the project in `/opt/mikrotik-client-monitor`, and run the collector with systemd. Replace example hostnames, usernames, paths, and mappings with your own values **only on the Linux host or router**. Keep them out of the Git repository.
+
+### 1. Install the project and create the service account
+
+```sh
+sudo apt update
+sudo apt install -y git python3 python3-venv openssh-client
+sudo useradd --system --home-dir /var/lib/mikrotik-client-monitor --create-home --shell /usr/sbin/nologin mikrotik-monitor
+sudo git clone https://github.com/gpekht/mikrotik-client-monitor.git /opt/mikrotik-client-monitor
+sudo python3 -m venv /opt/mikrotik-client-monitor/.venv
+sudo /opt/mikrotik-client-monitor/.venv/bin/pip install /opt/mikrotik-client-monitor
+```
+
+### 2. Generate a dedicated SSH key on the Linux host
+
+```sh
+sudo install -d -o mikrotik-monitor -g mikrotik-monitor -m 0700 /var/lib/mikrotik-client-monitor/.ssh
+sudo -u mikrotik-monitor ssh-keygen -q -t ed25519 -N '' -f /var/lib/mikrotik-client-monitor/.ssh/id_ed25519
+sudo cat /var/lib/mikrotik-client-monitor/.ssh/id_ed25519.pub
+```
+
+Copy the **public** key printed by the last command. The private key stays on this host; never upload it to the router or commit it. A key without a passphrase is used so systemd can run unattended, so keep the service account and key file permissions restricted.
+
+### 3. Create a least-privilege RouterOS user
+
+In an administrative RouterOS terminal, create a custom group with only `ssh,read` policies, then add the public key from step 2:
 
 ```routeros
 /user group add name=metrics-read policy=ssh,read
-/user add name=metrics-reader group=metrics-read password="<temporary-strong-password>"
-/user ssh-keys add user=metrics-reader key="<contents-of-public-key>"
+/user add name=metrics-reader group=metrics-read password="<unique-strong-password>"
+/user ssh-keys add user=metrics-reader key="<paste-the-public-ssh-key>"
 ```
 
-RouterOS versions that do not support `ssh-keys add` can upload the **public** key and use `/user ssh-keys import public-key-file=<filename> user=metrics-reader`. Never upload or commit the private key. Limit SSH access to the collector host in the router firewall or `/ip service` rules. Check your RouterOS version's support for your key type. Test the two read commands as this user before enabling the service:
+The built-in `read` group grants more permissions than this collector needs. RouterOS versions without `ssh-keys add` can upload the **public** key and use `/user ssh-keys import public-key-file=<filename> user=metrics-reader`. Restrict router SSH access to the collector host in your router firewall or `/ip service` rules. Use a key type supported by your RouterOS version. The collector uses SSH keys only, not password login.
+
+### 4. Pin the router's SSH host key and test both reads
+
+On the Linux host, set these two shell variables for the commands below. Use the router's actual hostname or address and SSH port:
 
 ```sh
-ssh -i /path/to/private/key metrics-reader@router.example.net '/interface bridge host print detail without-paging proplist=mac-address,on-interface,bridge,vid,local,invalid,disabled'
-ssh -i /path/to/private/key metrics-reader@router.example.net '/ip dhcp-server lease print detail without-paging proplist=status,active-mac-address,active-address,mac-address,address,host-name'
+ROUTER_ADDRESS=router.example.net
+ROUTER_SSH_PORT=22
+ssh-keyscan -p "$ROUTER_SSH_PORT" "$ROUTER_ADDRESS" > /tmp/mikrotik-host-key
+ssh-keygen -lf /tmp/mikrotik-host-key
 ```
 
-On the Linux host, generate a dedicated SSH key (`ssh-keygen -t ed25519 -f /path/to/private/key`), add its public part on RouterOS, and pin the router's host key in a dedicated `known_hosts` file. Verify the host key fingerprint through an independent trusted route before trusting it. The collector uses strict host key checking and never accepts a changed or unknown key automatically. It supports SSH keys only; no password goes into a process command line or source file.
-
-## Install and configure
+Compare the displayed fingerprint with the router host key obtained through a separately trusted administrative connection **before** installing it. Once it matches:
 
 ```sh
-python3 -m venv .venv
-.venv/bin/pip install .
-cp .env.example .env
-chmod 600 .env
-# Edit .env with your router, SSH, and remote write details.
-.venv/bin/mikrotik-client-monitor once
+sudo install -o mikrotik-monitor -g mikrotik-monitor -m 0600 /tmp/mikrotik-host-key /var/lib/mikrotik-client-monitor/.ssh/known_hosts
+rm /tmp/mikrotik-host-key
+sudo -u mikrotik-monitor ssh -T -p "$ROUTER_SSH_PORT" -i /var/lib/mikrotik-client-monitor/.ssh/id_ed25519 -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/var/lib/mikrotik-client-monitor/.ssh/known_hosts "metrics-reader@$ROUTER_ADDRESS" '/interface bridge host print detail without-paging proplist=mac-address,on-interface,bridge,vid,local,invalid,disabled'
+sudo -u mikrotik-monitor ssh -T -p "$ROUTER_SSH_PORT" -i /var/lib/mikrotik-client-monitor/.ssh/id_ed25519 -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/var/lib/mikrotik-client-monitor/.ssh/known_hosts "metrics-reader@$ROUTER_ADDRESS" '/ip dhcp-server lease print detail without-paging proplist=status,active-mac-address,active-address,mac-address,address,host-name'
 ```
 
-`GRAFANA_URL`, `GRAFANA_USER`, and `GRAFANA_TOKEN` are the Prometheus remote write URL, metrics instance ID, and a metrics write access token from your Grafana Cloud stack. They use the same direct protobuf + Snappy + Basic Auth method as JK-BMS Cloud Bridge. The URL must use HTTPS. The collector accepts any compatible Prometheus remote write endpoint using this authentication. The sample `.env.example` contains documentation-only placeholders. `.env`, key files, and host key files are ignored by Git.
+Both commands should return RouterOS property rows without a password prompt or host key warning. The collector also uses strict host key checking and will reject an unknown or changed router key.
 
-`INTERFACE_NAMES_JSON` maps RouterOS interface names to friendly labels. Unmapped interfaces use their RouterOS names. `DEVICE_NAMES_JSON` maps MAC addresses to persistent friendly names; DHCP hostname is the fallback. `ROUTER_LABEL` identifies a router when several collectors write to one metrics backend. `POLL_INTERVAL_SECONDS` controls `run` mode. `once` makes one collection/push and exits, suitable for a systemd timer.
+### 5. Add the Grafana Cloud settings
 
-The collector does not need to expose a local port. On SSH failure it pushes `mikrotik_collector_up=0` and exits nonzero in `once` mode. On remote write failure it exits nonzero; it does not log credentials or HTTP response bodies. Check the systemd journal for failures.
-
-## systemd on Linux / Raspberry Pi
-
-The supplied units assume the project is installed in `/opt/mikrotik-client-monitor`, with a `.venv` there, a dedicated `mikrotik-monitor` service account, and environment settings in `/etc/mikrotik-client-monitor.env` owned by root with mode `0600`. Give the service account read access to its SSH private key and pinned `known_hosts`. Adjust paths and account names for your host.
-
-For a continuously running service, copy `systemd/mikrotik-client-monitor.service` to `/etc/systemd/system/`, then run:
+In Grafana Cloud, open your stack's **Details → Prometheus → Details** and copy the remote write URL and metrics instance ID. Create a Cloud Access Policy token with `metrics:write` scope, or reuse a token already scoped for writing metrics. Put these values in a root-owned environment file on the Linux host:
 
 ```sh
+sudo install -o root -g root -m 0600 /opt/mikrotik-client-monitor/.env.example /etc/mikrotik-client-monitor.env
+sudoedit /etc/mikrotik-client-monitor.env
+```
+
+Set `ROUTER_HOST`, `ROUTER_PORT`, `ROUTER_USER`, `SSH_KEY_PATH=/var/lib/mikrotik-client-monitor/.ssh/id_ed25519`, `SSH_KNOWN_HOSTS=/var/lib/mikrotik-client-monitor/.ssh/known_hosts`, `GRAFANA_URL`, `GRAFANA_USER`, and `GRAFANA_TOKEN`. Set `ROUTER_LABEL` to a name you want in Grafana. Edit `INTERFACE_NAMES_JSON` for friendly AP/path names and optionally `DEVICE_NAMES_JSON` for MAC-to-device names. Keep the outer single quotes around each JSON mapping; they preserve the JSON when systemd loads the file. The sample contains placeholders only.
+
+`POLL_INTERVAL_SECONDS` controls the continuous service's poll interval. The default is 120 seconds. The Grafana URL must use HTTPS. This service sends protobuf + Snappy Prometheus remote write requests with Basic Auth, the same delivery approach as JK-BMS Cloud Bridge. It does not expose a local port.
+
+### 6. Make one test push, then enable periodic collection
+
+Install the units and start the one-shot service once:
+
+```sh
+sudo install -m 0644 /opt/mikrotik-client-monitor/systemd/mikrotik-client-monitor-once.service /etc/systemd/system/
+sudo install -m 0644 /opt/mikrotik-client-monitor/systemd/mikrotik-client-monitor.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now mikrotik-client-monitor.service
-sudo journalctl -u mikrotik-client-monitor.service -f
+sudo systemctl start mikrotik-client-monitor-once.service
+sudo journalctl -u mikrotik-client-monitor-once.service -n 30 --no-pager
 ```
 
-For one-shot execution, install `mikrotik-client-monitor-once.service` and `mikrotik-client-monitor.timer`, then enable the timer. Its example interval is two minutes; edit `OnUnitActiveSec` to your desired schedule and reload systemd. Use either the continuous service or the timer, not both.
+Look for `Collected ... clients` and `Pushed ... metric series`. Then enable continuous polling:
+
+```sh
+sudo systemctl enable --now mikrotik-client-monitor.service
+sudo systemctl status mikrotik-client-monitor.service --no-pager
+sudo journalctl -u mikrotik-client-monitor.service -n 30 --no-pager
+```
+
+In Grafana **Explore**, select your Prometheus data source and run `mikrotik_collector_up` as an instant query. Expect `1` for your `router` label. Then run `mikrotik_clients_by_interface` and `mikrotik_client_info`. Create the table and count panels using the queries below.
+
+The supplied timer is an alternative to the continuous service. To use it, install `systemd/mikrotik-client-monitor.timer`, edit its `OnUnitActiveSec` schedule, reload systemd, and enable the timer. The timer's interval comes from that unit; `POLL_INTERVAL_SECONDS` applies only to continuous `run` mode. Run either the continuous service or the timer, not both.
+
+### If setup fails
+
+Check the one-shot journal first. SSH errors usually mean the router user, key, host key file, port, or RouterOS permissions need correction. HTTP `401` or `403` means the remote write URL, instance ID, or token/scope needs correction. If the push succeeds but no clients appear, inspect the two SSH command outputs: the bridge must learn MACs on the expected interfaces, and DHCP enrichment requires bound leases. An AP behind a shared switch cannot be distinguished from other devices on that same router-facing port.
+
+On SSH collection failure the service attempts to push `mikrotik_collector_up=0`; on remote write failure it exits nonzero in `once` mode. It does not log credentials or HTTP response bodies.
 
 ## Grafana examples
 
