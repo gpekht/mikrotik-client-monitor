@@ -150,6 +150,17 @@ Check `journalctl --user -u mikrotik-client-monitor.service -n 50 --no-pager`. S
 
 On SSH collection failure the service attempts to push `mikrotik_collector_up=0`; on remote write failure the one-shot command exits nonzero. It does not log credentials or HTTP response bodies.
 
+## Import the Grafana dashboard
+
+The ready-to-import dashboard is [`dashboards/mikrotik-client-monitor.json`](dashboards/mikrotik-client-monitor.json). It contains only generic metric names and queries; it has no credentials, router address, device names, or data source UID. It provides a current client table, clients grouped by router-facing interface/AP, a history of counts, and collector health. The **Router** and **Freshness** controls let you choose which router to view and how recently a sample must have arrived. The default freshness window is 300 seconds for the included two-minute timer.
+
+1. In your Grafana instance, open **Dashboards → New → Import dashboard**.
+2. Upload `dashboards/mikrotik-client-monitor.json` from this checkout (or download that file from the public repository).
+3. Select the **Prometheus** data source that receives this collector's metrics, then click **Import**. This is the query data source in Grafana, not the remote write URL in `.env`.
+4. Open the imported dashboard. The **Collector** panel should say **Healthy**, and the **Current clients** table should populate after a successful collector run. Select a router if your data source has several. If you changed the timer cadence, set **Freshness** to a value greater than the time between successful runs.
+
+If panels are empty, run `mikrotik_collector_up` in Grafana **Explore** using the same Prometheus data source, then check the Pi with `systemctl --user list-timers mikrotik-client-monitor.timer` and `journalctl --user -u mikrotik-client-monitor.service -n 30 --no-pager`. A successful remote write can take a short time to become queryable. Grafana's [dashboard import instructions](https://grafana.com/docs/grafana/latest/visualizations/dashboards/build-dashboards/import-dashboards/) cover the import screen.
+
 ## Grafana examples
 
 Use your Prometheus data source. For a table of clients observed recently, use an instant query with the freshness filter below. Adjust `180` seconds to exceed your polling interval but stay below your desired disappearance delay:
