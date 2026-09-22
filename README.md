@@ -19,6 +19,17 @@ The bridge FDB shows the router-facing interface through which a MAC was learned
 
 Client MAC, IP, and hostname are metric labels. They leave your network for the configured remote write service and can create many time series on busy networks. Configure retention/access accordingly. Rename devices with `DEVICE_NAMES_JSON` if their DHCP hostname is missing or unhelpful. Private/randomized MACs appear as different devices when they change.
 
+## View clients immediately in the Pi terminal
+
+After setup, log in to the Pi and run:
+
+```sh
+cd "$HOME/mikrotik-client-monitor"
+venv/bin/mikrotik-client-monitor show
+```
+
+This makes a fresh SSH read and prints each learned client under its router-facing interface, with IP, MAC, VLAN, and DHCP or configured name. Clients without a bound DHCP lease show `-` for IP and `<unknown>` for name. Friendly group names come from `INTERFACE_NAMES_JSON` in your private `.env`; otherwise the RouterOS interface name is shown. `show` does not push metrics or change the timer. It only needs the router and SSH settings, so Grafana credentials are optional for this command. Run it again whenever you want a fresh view.
+
 ## Raspberry Pi / Linux setup in your home folder
 
 This follows the JK-BMS layout: a checkout at `~/mikrotik-client-monitor`, a `venv/` inside it, and a private `.env` beside the code. A one-shot user-level systemd timer runs the collector. The SSH key and pinned router host key live in `~/.ssh`; unit files live in `~/.config/systemd/user`. No project files or secrets need to be installed under `/opt` or `/etc`.

@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 
 from .collector import (CollectionError, HOST_COMMAND, LEASE_COMMAND,
                         make_snapshot, ssh_read)
+from .display import render_snapshot
 from .push import build_request, push_request
 
 LOG = logging.getLogger("mikrotik_client_monitor")
@@ -66,14 +67,14 @@ def _mapping(name: str) -> dict[str, str]:
     return data
 
 
-def config_from_env() -> Config:
+def config_from_env(require_push: bool = True) -> Config:
     host, user = _required("ROUTER_HOST"), _required("ROUTER_USER")
     if not re.fullmatch(r"[A-Za-z0-9_.:-]+", host) or host.startswith("-"):
         raise ValueError("Invalid ROUTER_HOST")
     if not re.fullmatch(r"[A-Za-z0-9_.-]+", user) or user.startswith("-"):
         raise ValueError("Invalid ROUTER_USER")
-    url = _required("GRAFANA_URL")
-    if not url.startswith("https://"):
+    url = _required("GRAFANA_URL") if require_push else ""
+    if require_push and not url.startswith("https://"):
         raise ValueError("GRAFANA_URL must use HTTPS")
     names = _mapping("DEVICE_NAMES_JSON")
     if any(not re.fullmatch(r"(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}", mac) for mac in names):
@@ -83,11 +84,11 @@ def config_from_env() -> Config:
         key_path=_required("SSH_KEY_PATH"), known_hosts=_required("SSH_KNOWN_HOSTS"),
         ssh_timeout=_integer("SSH_TIMEOUT_SECONDS", 15, 1, 120),
         interval=_integer("POLL_INTERVAL_SECONDS", 120, 10, 86400),
-        router_label=_required("ROUTER_LABEL"),
+        router_label=_required("ROUTER_LABEL") if require_push else os.getenv("ROUTER_LABEL", host).strip() or host,
         interface_names=_mapping("INTERFACE_NAMES_JSON"),
         device_names={mac.upper(): name for mac, name in names.items()},
-        grafana_url=url, grafana_user=_required("GRAFANA_USER"),
-        grafana_token=_required("GRAFANA_TOKEN"),
+        grafana_url=url, grafana_user=_required("GRAFANA_USER") if require_push else "",
+        grafana_token=_required("GRAFANA_TOKEN") if require_push else "",
         http_timeout=_integer("HTTP_TIMEOUT_SECONDS", 15, 1, 120),
     )
 
@@ -119,17 +120,25 @@ def cycle(config: Config, last_success: float = 0) -> tuple[bool, float]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="MikroTik client location monitor")
-    parser.add_argument("mode", choices=("once", "run"), help="one poll or periodic polling")
+    parser.add_argument("mode", choices=("once", "run", "show"),
+                        help="one push, periodic push, or print current clients")
     parser.add_argument("--env-file", type=Path, default=Path(".env"))
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if args.env_file.exists():
         load_dotenv(args.env_file, override=False)
     try:
-        config = config_from_env()
+        config = config_from_env(require_push=args.mode != "show")
     except ValueError as exc:
         LOG.error("Configuration error: %s", exc)
         return 2
+    if args.mode == "show":
+        try:
+            print(render_snapshot(collect(config)), end="")
+        except CollectionError as exc:
+            LOG.error("Router collection failed: %s", exc)
+            return 1
+        return 0
     last_success = 0.0
     while True:
         started = time.monotonic()
