@@ -168,7 +168,8 @@ def ssh_read(host: str, port: int, user: str, key_path: str,
             "-o", f"UserKnownHostsFile={known_hosts}",
             "-o", f"ConnectTimeout={timeout}", "--", f"{user}@{host}", command]
     try:
-        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout + 5, check=False)
+        result = subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True,
+                                text=True, timeout=timeout + 5, check=False)
     except (OSError, UnicodeError, subprocess.TimeoutExpired) as exc:
         raise CollectionError(f"SSH execution failed ({type(exc).__name__})") from exc
     if result.returncode:
